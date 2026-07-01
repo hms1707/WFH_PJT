@@ -7,12 +7,24 @@ import ta
 import json
 import os
 import urllib.request 
+from dotenv import load_dotenv
+from supabase import create_client, Client
+
+# 환경 변수 로드 (.env 파일)
+load_dotenv()
 
 # ==========================================
-# 1. 거래소 객체 초기화 (API 키 설정)
+# 1. Supabase (DB) 및 거래소 초기화
 # ==========================================
-# ★ 클라우드 배포를 위해 환경 변수(os.getenv)에서 키를 불러옵니다.
-# 깃허브에는 키가 보이지 않고, Streamlit Secrets 설정에서만 읽어옵니다!
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+
+if not SUPABASE_URL or not SUPABASE_KEY:
+    print("❌ 에러: .env 파일에 SUPABASE_URL과 SUPABASE_KEY를 입력해주세요!")
+    sys.exit()
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 exchange = ccxt.upbit({
     'apiKey': os.getenv('UPBIT_API_KEY', ''),  
     'secret': os.getenv('UPBIT_SECRET_KEY', ''),  
@@ -21,7 +33,7 @@ exchange = ccxt.upbit({
 
 binance_live = ccxt.binance({'enableRateLimit': True}) 
 binance_sandbox = ccxt.binance({
-    'apiKey': os.getenv('BINANCE_API_KEY', ''), # 샌드박스 테스트용 키도 숨김 처리 완료!
+    'apiKey': os.getenv('BINANCE_API_KEY', ''),
     'secret': os.getenv('BINANCE_SECRET_KEY', ''),
     'enableRateLimit': True,
 })
@@ -72,22 +84,7 @@ def test_sandbox_connection():
         print(f"❌ 연결 실패: {e}")
         return False
 
-def show_final_report():
-    print("\n" + "="*40)
-    print("📊 최종 거래 성적표")
-    print(f"⏱️ 가동 시간: {datetime.now() - bot_state['start_time']}")
-    print(f"🔄 총 거래 횟수: {bot_state['total_trades']}회")
-    
-    if bot_state['profits']:
-        total_profit = sum(bot_state['profits'])
-        avg_profit = total_profit / len(bot_state['profits'])
-        print(f"📈 평균 순수익률: {avg_profit:.2f}%")
-        print(f"💰 누적 순수익률(단순합): {total_profit:.2f}%")
-    else:
-        print("📉 거래된 내역이 없습니다.")
-    print("="*40 + "\n")
-
-# --- [제어 센터: 시장 분석 및 판단 엔진 V2] ---
+# --- [제어 센터: 시장 분석 및 판단 엔진] ---
 def decide_trade(symbol):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1m', limit=100)
@@ -133,90 +130,28 @@ def run_trading_bot():
         symbol = 'BTC/KRW'
         
         FEE_RATE = 0.001 
-        
         USDT_KRW = get_realtime_exchange_rate() 
         trend_sig, grid_sig, krw_price, market_temp, market_state, rsi = decide_trade(symbol)
         
-        if krw_price == 0:
-            return 
+        if krw_price == 0: return 
             
         try:
             binance_ticker = binance_live.fetch_ticker('BTC/USDT')
             binance_price = binance_ticker['last']
             premium_pct = (krw_price / (binance_price * USDT_KRW) - 1) * 100
             diff_krw = krw_price - (binance_price * USDT_KRW)
-        except Exception:
-            binance_price = 0
-            premium_pct = 0
-            diff_krw = 0
-
-        bot_state['temps'].append(market_temp)
-        
-        if not bot_state['is_holding'] and now_ts < bot_state['cool_down_until']:
-            cd_remain = int(bot_state['cool_down_until'] - now_ts)
-            print(f"[{now}] 📡 UPBIT: {krw_price:,.0f}원 | BINANCE: ${binance_price:,.2f} | ⏳ 쿨다운 대기 중... ({cd_remain}초 남음)")
-        else:
-            print(f"[{now}] 📡 UPBIT: {krw_price:,.0f}원 | BINANCE: ${binance_price:,.2f} | 김프: {premium_pct:.2f}% | 🌡️ {market_temp}도")
+        except:
+            binance_price, premium_pct, diff_krw = 0, 0, 0
 
         # ==========================================
-        # ★ 잔고 조회 로직
+        # ★ 원격 제어 (수동 매매) 클라우드 명령 확인 로직
         # ==========================================
-        # 1. 바이낸스 샌드박스 잔고
         try:
-            balance_binance = binance_sandbox.fetch_balance()
-            usdt_bal = balance_binance['free'].get('USDT', 0)
-            btc_bal = balance_binance['free'].get('BTC', 0)
-        except Exception:
-            usdt_bal = 0
-            btc_bal = 0
-
-        # 2. 업비트 실제 잔고 (API 키가 없으면 0 반환)
-        try:
-            balance_upbit = exchange.fetch_balance()
-            upbit_krw = balance_upbit['free'].get('KRW', 0)
-            upbit_btc = balance_upbit['free'].get('BTC', 0)
-        except Exception:
-            upbit_krw = 0
-            upbit_btc = 0
-
-        net_profit_rate = 0.0
-        if bot_state['is_holding']:
-            trade_amount_eval = 0.001 
-            gross_profit_krw = (krw_price - bot_state['buy_price']) * trade_amount_eval
-            fee_krw = (bot_state['buy_price'] * trade_amount_eval * FEE_RATE) + (krw_price * trade_amount_eval * FEE_RATE)
-            net_profit_krw = gross_profit_krw - fee_krw
-            net_profit_rate = (net_profit_krw / (bot_state['buy_price'] * trade_amount_eval)) * 100
-
-        # JSON에 업비트 정보와 실시간 환율 정보 추가!
-        status_data = {
-            "time": now,
-            "price": krw_price,
-            "binance_price": binance_price,
-            "premium_pct": premium_pct,
-            "diff_krw": diff_krw,
-            "temp": market_temp,
-            "state": market_state,
-            "rsi": rsi,
-            "is_holding": bot_state['is_holding'],
-            "buy_price": bot_state['buy_price'],
-            "current_profit": net_profit_rate,
-            "usdt_bal": usdt_bal,
-            "btc_bal": btc_bal,
-            "upbit_krw": upbit_krw,         # ★ 업비트 원화
-            "upbit_btc": upbit_btc,         # ★ 업비트 코인
-            "usdt_krw_rate": USDT_KRW       # ★ 실시간 환율 적용
-        }
-
-        # === [수동 매매 명령 처리] ===
-        cmd_file = "manual_cmd.json"
-        if os.path.exists(cmd_file):
-            try:
-                with open(cmd_file, "r", encoding="utf-8") as f:
-                    cmd = json.load(f)
-                os.remove(cmd_file) 
-                
+            # DB에서 실행되지 않은 명령을 가져옴
+            cmds = supabase.table('bot_commands').select('*').eq('is_executed', False).execute()
+            for cmd in cmds.data:
                 action = cmd.get("action")
-                amount_krw = cmd.get("amount_krw", 10000)
+                amount_krw = float(cmd.get("amount_krw", 10000))
                 
                 trade_amount = round(amount_krw / krw_price, 4) if krw_price > 0 else 0.001
                 if trade_amount < 0.001: trade_amount = 0.001 
@@ -225,7 +160,7 @@ def run_trading_bot():
                     binance_sandbox.create_market_buy_order('BTC/USDT', trade_amount)
                     bot_state['is_holding'] = True
                     bot_state['buy_price'] = krw_price
-                    print(f"🔴 [수동 매수 완료] 금액: {amount_krw:,}원 (약 {trade_amount} BTC)")
+                    print(f"🔴 [원격 수동 매수 완료] 금액: {amount_krw:,}원")
                     
                 elif action == "SELL" and bot_state['is_holding']:
                     binance_sandbox.create_market_sell_order('BTC/USDT', trade_amount)
@@ -236,58 +171,91 @@ def run_trading_bot():
                     net_profit_rate = (net_profit_krw / (bot_state['buy_price'] * trade_amount)) * 100
                     
                     old_buy_price = bot_state['buy_price'] 
-                    
                     bot_state['is_holding'] = False
                     bot_state['total_trades'] += 1
                     bot_state['profits'].append(net_profit_rate)
                     bot_state['cool_down_until'] = time.time() + 180 
                     
-                    print(f"🔵 [수동 매도 완료] 순수익률: {net_profit_rate:.2f}% (※ 3분간 매수 금지)")
+                    print(f"🔵 [원격 수동 매도 완료] 순수익률: {net_profit_rate:.2f}%")
                     
-                    history_exists = os.path.isfile("trade_history.csv")
-                    with open("trade_history.csv", "a", encoding="utf-8") as f:
-                        if not history_exists:
-                            f.write("time,buy_price,sell_price,trade_amount,profit_krw,profit_rate,reason\n")
-                        f.write(f"{now},{old_buy_price},{krw_price},{trade_amount},{net_profit_krw:.0f},{net_profit_rate:.2f},수동 매도(테스트)\n")
-            except Exception as e:
-                print(f"수동 명령 처리 중 에러: {e}")
+                    # DB에 체결 내역 저장
+                    history_data = {
+                        "time": now, "buy_price": old_buy_price, "sell_price": krw_price,
+                        "trade_amount": trade_amount, "profit_krw": net_profit_krw,
+                        "profit_rate": net_profit_rate, "reason": "원격 수동 매도"
+                    }
+                    supabase.table('trade_history').insert(history_data).execute()
+                
+                # 실행 완료 처리 (DB 업데이트)
+                supabase.table('bot_commands').update({'is_executed': True}).eq('id', cmd['id']).execute()
+        except Exception as e:
+            print(f"명령어 수신 에러: {e}")
+
+        # 잔고 조회 로직
+        try:
+            balance_binance = binance_sandbox.fetch_balance()
+            usdt_bal, btc_bal = balance_binance['free'].get('USDT', 0), balance_binance['free'].get('BTC', 0)
+        except: usdt_bal, btc_bal = 0, 0
+
+        try:
+            balance_upbit = exchange.fetch_balance()
+            upbit_krw, upbit_btc = balance_upbit['free'].get('KRW', 0), balance_upbit['free'].get('BTC', 0)
+        except: upbit_krw, upbit_btc = 0, 0
+
+        net_profit_rate = 0.0
+        if bot_state['is_holding']:
+            trade_amount_eval = 0.001 
+            gross_profit_krw = (krw_price - bot_state['buy_price']) * trade_amount_eval
+            fee_krw = (bot_state['buy_price'] * trade_amount_eval * FEE_RATE) + (krw_price * trade_amount_eval * FEE_RATE)
+            net_profit_krw = gross_profit_krw - fee_krw
+            net_profit_rate = (net_profit_krw / (bot_state['buy_price'] * trade_amount_eval)) * 100
+
+        # 상태값 구성
+        status_data = {
+            "time": now, "price": krw_price, "binance_price": binance_price,
+            "premium_pct": premium_pct, "diff_krw": diff_krw, "temp": market_temp,
+            "state": market_state, "rsi": rsi, "is_holding": bot_state['is_holding'],
+            "buy_price": bot_state['buy_price'], "current_profit": net_profit_rate,
+            "usdt_bal": usdt_bal, "btc_bal": btc_bal, "upbit_krw": upbit_krw,
+            "upbit_btc": upbit_btc, "usdt_krw_rate": USDT_KRW
+        }
+
+        # ==========================================
+        # ★ 봇 상태를 DB에 쏘기 (대시보드 전송용)
+        # ==========================================
+        try:
+            supabase.table('bot_status').update({'status_data': status_data}).eq('id', 1).execute()
+        except Exception as e:
+            pass # 일시적인 네트워크 오류는 무시
+
+        # 터미널 출력
+        if not bot_state['is_holding'] and now_ts < bot_state['cool_down_until']:
+            print(f"[{now}] 📡 UPBIT: {krw_price:,.0f}원 | ⏳ 쿨다운 대기 중... ({int(bot_state['cool_down_until'] - now_ts)}초 남음)")
+        else:
+            print(f"[{now}] 📡 UPBIT: {krw_price:,.0f}원 | 김프: {premium_pct:.2f}% | 🌡️ {market_temp}도")
+            if bot_state['is_holding']:
+                color_code = "\033[31m" if net_profit_rate >= 0 else "\033[34m"
+                print(f" 💼 [보유 중] 순수익률: {color_code}{net_profit_rate:+.2f}%\033[0m")
 
         # === [자동 매수/매도 로직 V2] ===
         trade_amount = 0.001 
         
         if not bot_state['is_holding']:
-            if now_ts < bot_state['cool_down_until']:
-                pass 
-            else:
+            if now_ts >= bot_state['cool_down_until']:
                 if trend_sig == "BUY" or grid_sig == "BUY":
                     binance_sandbox.create_market_buy_order('BTC/USDT', trade_amount)
                     bot_state['is_holding'] = True
                     bot_state['buy_price'] = krw_price
                     print(f"🚀 자동 매수 완료: {krw_price:,.0f} KRW (추세/MACD:{trend_sig} | RSI: {rsi:.1f})")
-        
         else:
-            color_code = "\033[31m" if net_profit_rate >= 0 else "\033[34m"
-            print(f" 💼 [보유 중] 순수익률(수수료 차감 후): {color_code}{net_profit_rate:+.2f}%\033[0m")
-            
             should_sell = False
             reason = ""
-            
-            if net_profit_rate >= 0.35:
-                should_sell = True
-                reason = "목표 달성 익절"
-            elif net_profit_rate <= -0.40:
-                should_sell = True
-                reason = "안전 손절"
-            elif grid_sig == "SELL":
-                should_sell = True
-                reason = "RSI 과매수 탈출"
+            if net_profit_rate >= 0.35: should_sell, reason = True, "목표 달성 익절"
+            elif net_profit_rate <= -0.40: should_sell, reason = True, "안전 손절"
+            elif grid_sig == "SELL": should_sell, reason = True, "RSI 과매수 탈출"
             elif trend_sig == "SELL":
-                if net_profit_rate > 0.1: 
-                    should_sell = True
-                    reason = "추세 꺾임 (안전 익절)"
-                elif net_profit_rate <= -0.2: 
-                    should_sell = True
-                    reason = "추세 꺾임 (방어 손절)"
+                if net_profit_rate > 0.1: should_sell, reason = True, "추세 꺾임 (안전 익절)"
+                elif net_profit_rate <= -0.2: should_sell, reason = True, "추세 꺾임 (방어 손절)"
 
             if should_sell:
                 binance_sandbox.create_market_sell_order('BTC/USDT', trade_amount)
@@ -304,27 +272,28 @@ def run_trading_bot():
                 
                 print(f"💰 자동 매도 완료 [{reason}] 최종 순수익률: {net_profit_rate:.2f}% (※ 3분 쿨다운)")
                 
-                history_exists = os.path.isfile("trade_history.csv")
-                with open("trade_history.csv", "a", encoding="utf-8") as f:
-                    if not history_exists:
-                        f.write("time,buy_price,sell_price,trade_amount,profit_krw,profit_rate,reason\n")
-                    f.write(f"{now},{old_buy_price},{krw_price},{trade_amount},{net_profit_krw:.0f},{net_profit_rate:.2f},{reason}\n")
-                    
-        with open("bot_status.json", "w", encoding="utf-8") as f:
-            json.dump(status_data, f, ensure_ascii=False)
+                # DB에 체결 내역 저장
+                history_data = {
+                    "time": now, "buy_price": old_buy_price, "sell_price": krw_price,
+                    "trade_amount": trade_amount, "profit_krw": net_profit_krw,
+                    "profit_rate": net_profit_rate, "reason": reason
+                }
+                try:
+                    supabase.table('trade_history').insert(history_data).execute()
+                except Exception as e:
+                    print("DB 저장 실패:", e)
 
     except Exception as e:
         print(f"시스템 에러: {e}")
 
 if __name__ == "__main__":
-    print("🚀 하이브리드 추세추종 봇 V2 시작...")
+    print("🚀 하이브리드 추세추종 봇 V3 (클라우드 DB 버전) 시작...")
     if test_sandbox_connection():
         init_clean_state()
         try:
             while True:
                 run_trading_bot()
-                time.sleep(1) 
+                time.sleep(1.5) 
         except KeyboardInterrupt:
-            print("\n🛑 봇 종료 신호 감지! 통계를 계산합니다...")
             show_final_report()
             sys.exit()
