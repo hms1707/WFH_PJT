@@ -11,17 +11,18 @@ import urllib.request
 # ==========================================
 # 1. 거래소 객체 초기화 (API 키 설정)
 # ==========================================
-# ★ 업비트 잔고 조회를 위해 발급받으신 API 키를 아래에 입력해 주세요!
+# ★ 클라우드 배포를 위해 환경 변수(os.getenv)에서 키를 불러옵니다.
+# 깃허브에는 키가 보이지 않고, Streamlit Secrets 설정에서만 읽어옵니다!
 exchange = ccxt.upbit({
-    'apiKey': ' ',  # 예: 'x8...a9'
-    'secret': ' ',  # 예: 'Yq...3z'
+    'apiKey': os.getenv('UPBIT_API_KEY', ''),  
+    'secret': os.getenv('UPBIT_SECRET_KEY', ''),  
     'enableRateLimit': True
 }) 
 
 binance_live = ccxt.binance({'enableRateLimit': True}) 
 binance_sandbox = ccxt.binance({
-    'apiKey': ' ',
-    'secret': ' ',
+    'apiKey': os.getenv('BINANCE_API_KEY', ''), # 샌드박스 테스트용 키도 숨김 처리 완료!
+    'secret': os.getenv('BINANCE_SECRET_KEY', ''),
     'enableRateLimit': True,
 })
 binance_sandbox.set_sandbox_mode(True)
