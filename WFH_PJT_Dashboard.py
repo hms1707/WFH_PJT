@@ -4,20 +4,24 @@ import json
 import time
 import os
 
-# 1. 페이지 레이아웃: wide 모드로 설정하여 가로 공간 최대한 확보
+# 1. 페이지 설정: 가로 공간을 최대한 활용하는 wide 모드
 st.set_page_config(page_title="하이브리드 트레이딩 대시보드", page_icon="🚀", layout="wide")
 
-# 스타일 최적화 (Streamlit 기본 여백 줄이기)
+# 레이아웃을 더 시원하게 만드는 CSS 최적화
 st.markdown("""
     <style>
-    .block-container { padding-top: 2rem; padding-bottom: 2rem; }
+    .block-container { padding-top: 1rem; padding-bottom: 1rem; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🚀 자동매매 봇 실시간 모니터링")
+st.markdown("---")
 
 def load_status():
     try:
+        # 데이터가 없을 경우를 대비해 에러 방지 처리
+        if not os.path.exists("bot_status.json"):
+            return None
         with open("bot_status.json", "r", encoding="utf-8") as f:
             return json.load(f)
     except:
@@ -34,23 +38,25 @@ def load_history():
 status = load_status()
 
 if status is None:
-    st.warning("봇이 데이터를 수집 중입니다... 엔진(`WFH_PJT_Engine.py`)이 실행 중인지 확인해주세요!")
+    st.warning("봇이 데이터를 수집 중입니다... (엔진인 `WFH_PJT_Engine.py`가 실행 중인지 확인해주세요!)")
 else:
-    # 2. 메트릭 레이아웃: 화면 넓이에 맞춰 균등 분배
+    # 2. 상단 지표: 4개로 균등 분할하여 가로폭 최적화
     col1, col2, col3, col4 = st.columns(4)
-    with col1: st.metric("현재 비트코인 가격", f"{status['price']:,.0f} 원")
-    with col2: st.metric("현재 시장 온도 🌡️", f"{status['temp']}도", status['state'])
-    with col3: 
-        holding = "보유 중 🟢" if status['is_holding'] else "대기 중 💤"
-        st.metric("포지션 상태", holding)
-    with col4: 
+    
+    with col1:
+        st.metric("현재 비트코인 가격", f"{status.get('price', 0):,.0f} 원")
+    with col2:
+        st.metric("현재 시장 온도 🌡️", f"{status.get('temp', 0)}도", status.get('state', '보합'))
+    with col3:
+        holding_str = "보유 중 🟢" if status.get('is_holding') else "대기 중 💤"
+        st.metric("포지션 상태", holding_str)
+    with col4:
         profit = status.get('current_profit', 0)
-        st.metric("현재 수익률 📈", f"{profit:.2f}%")
+        st.metric("현재 보유 수익률 📈", f"{profit:.2f}%")
 
     st.markdown("---")
     
-    # 3. 차트 vs 거래내역 비중 조절 (차트 3 : 표 1)
-    # col_chart를 3배 크게 할당하여 넓게 쓰기
+    # 3. 차트(넓게)와 거래 내역(좁게)을 3:1 비율로 배치
     col_chart, col_table = st.columns([3, 1])
     
     history_df = load_history()
@@ -59,18 +65,19 @@ else:
         st.subheader("📊 누적 수익률 차트")
         if not history_df.empty:
             history_df['cumulative_profit'] = history_df['profit_rate'].cumsum()
-            # use_container_width=True로 차트가 부모 컨테이너(col_chart)를 꽉 채우게 함
+            # use_container_width=True로 차트가 컨테이너를 가득 채우게 함
             st.line_chart(history_df['cumulative_profit'], use_container_width=True)
         else:
-            st.info("아직 거래 내역이 없습니다.")
+            st.info("아직 완료된 거래가 없습니다.")
             
     with col_table:
         st.subheader("📋 최근 거래 체결 내역")
         if not history_df.empty:
-            # 표도 꽉 차게 설정
+            # use_container_width=True로 표도 가로폭에 맞춤
             st.dataframe(history_df.iloc[::-1].head(10), use_container_width=True)
         else:
-            st.info("거래 내역이 없습니다.")
+            st.info("거래 내역 없음")
 
+# 2초마다 갱신
 time.sleep(2)
 st.rerun()
