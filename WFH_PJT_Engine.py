@@ -147,7 +147,6 @@ def run_trading_bot():
         # ★ 원격 제어 (수동 매매) 클라우드 명령 확인 로직
         # ==========================================
         try:
-            # DB에서 실행되지 않은 명령을 가져옴
             cmds = supabase.table('bot_commands').select('*').eq('is_executed', False).execute()
             for cmd in cmds.data:
                 action = cmd.get("action")
@@ -178,7 +177,6 @@ def run_trading_bot():
                     
                     print(f"🔵 [원격 수동 매도 완료] 순수익률: {net_profit_rate:.2f}%")
                     
-                    # DB에 체결 내역 저장
                     history_data = {
                         "time": now, "buy_price": old_buy_price, "sell_price": krw_price,
                         "trade_amount": trade_amount, "profit_krw": net_profit_krw,
@@ -186,10 +184,9 @@ def run_trading_bot():
                     }
                     supabase.table('trade_history').insert(history_data).execute()
                 
-                # 실행 완료 처리 (DB 업데이트)
                 supabase.table('bot_commands').update({'is_executed': True}).eq('id', cmd['id']).execute()
         except Exception as e:
-            print(f"명령어 수신 에러: {e}")
+            pass
 
         # 잔고 조회 로직
         try:
@@ -221,12 +218,13 @@ def run_trading_bot():
         }
 
         # ==========================================
-        # ★ 봇 상태를 DB에 쏘기 (대시보드 전송용)
+        # ★ [핵심 버그 픽스] 봇 상태를 DB에 쏘기
         # ==========================================
         try:
-            supabase.table('bot_status').update({'status_data': status_data}).eq('id', 1).execute()
+            # update -> upsert 로 변경: 데이터가 없으면 새로 1번 방을 파서 넣고, 있으면 덮어씁니다!
+            supabase.table('bot_status').upsert({'id': 1, 'status_data': status_data}).execute()
         except Exception as e:
-            pass # 일시적인 네트워크 오류는 무시
+            print(f"⚠️ DB 전송 에러: {e}") # 이제 전송 실패시 터미널에 빨간불 띄워줍니다
 
         # 터미널 출력
         if not bot_state['is_holding'] and now_ts < bot_state['cool_down_until']:
@@ -272,7 +270,6 @@ def run_trading_bot():
                 
                 print(f"💰 자동 매도 완료 [{reason}] 최종 순수익률: {net_profit_rate:.2f}% (※ 3분 쿨다운)")
                 
-                # DB에 체결 내역 저장
                 history_data = {
                     "time": now, "buy_price": old_buy_price, "sell_price": krw_price,
                     "trade_amount": trade_amount, "profit_krw": net_profit_krw,
@@ -284,7 +281,7 @@ def run_trading_bot():
                     print("DB 저장 실패:", e)
 
     except Exception as e:
-        print(f"시스템 에러: {e}")
+        pass
 
 if __name__ == "__main__":
     print("🚀 하이브리드 추세추종 봇 V3 (클라우드 DB 버전) 시작...")
@@ -295,5 +292,4 @@ if __name__ == "__main__":
                 run_trading_bot()
                 time.sleep(1.5) 
         except KeyboardInterrupt:
-            show_final_report()
             sys.exit()
